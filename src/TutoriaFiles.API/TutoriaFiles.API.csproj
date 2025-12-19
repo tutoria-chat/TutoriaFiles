@@ -18,10 +18,4 @@
     <ProjectReference Include="..\TutoriaFiles.Infrastructure\TutoriaFiles.Infrastructure.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="web.config">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
 </Project>
