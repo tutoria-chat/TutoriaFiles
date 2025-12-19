@@ -3,6 +3,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using TutoriaFiles.Infrastructure;
+using TutoriaFiles.API.Authentication;
 using AspNetCoreRateLimit;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -49,27 +50,37 @@ builder.Services.AddControllers()
 
 builder.Services.AddEndpointsApiExplorer();
 
-// Configure JWT Authentication (optional - for validating tokens from TutoriaApi)
+// Add HttpClient for calling TutoriaApi
+builder.Services.AddHttpClient();
+
+// Configure JWT Authentication with TutoriaApi validation + local fallback
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 var secretKey = jwtSettings["SecretKey"];
+var tutoriaApiUrl = builder.Configuration["TutoriaApi:BaseUrl"];
 
-if (!string.IsNullOrWhiteSpace(secretKey))
+if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
 {
+    // Register custom authentication handler that calls TutoriaApi first, then falls back to local validation
     builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(options =>
-        {
-            options.TokenValidationParameters = new TokenValidationParameters
+        .AddScheme<JwtBearerOptions, TutoriaAuthenticationHandler>(
+            JwtBearerDefaults.AuthenticationScheme,
+            options =>
             {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-                ValidateIssuer = true,
-                ValidIssuer = jwtSettings["Issuer"],
-                ValidateAudience = true,
-                ValidAudience = jwtSettings["Audience"],
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.Zero
-            };
-        });
+                // These options are used by the custom handler for local fallback
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = string.IsNullOrWhiteSpace(secretKey)
+                        ? null
+                        : new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+                    ValidateIssuer = !string.IsNullOrWhiteSpace(jwtSettings["Issuer"]),
+                    ValidIssuer = jwtSettings["Issuer"],
+                    ValidateAudience = !string.IsNullOrWhiteSpace(jwtSettings["Audience"]),
+                    ValidAudience = jwtSettings["Audience"],
+                    ValidateLifetime = true,
+                    ClockSkew = TimeSpan.Zero
+                };
+            });
 
     builder.Services.AddAuthorization(options =>
     {
@@ -88,7 +99,15 @@ if (!string.IsNullOrWhiteSpace(secretKey))
         options.AddPolicy("SuperAdminOnly", policy =>
             policy.RequireRole("super_admin"));
     });
-    Console.WriteLine("✓ JWT Authentication configured");
+
+    if (!string.IsNullOrWhiteSpace(tutoriaApiUrl))
+    {
+        Console.WriteLine($"✓ JWT Authentication configured (TutoriaApi: {tutoriaApiUrl} with local fallback)");
+    }
+    else
+    {
+        Console.WriteLine("✓ JWT Authentication configured (local validation only)");
+    }
 }
 else
 {
