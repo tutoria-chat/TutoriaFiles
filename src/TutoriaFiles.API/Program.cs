@@ -1,8 +1,6 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Diagnostics;
-using System.Text;
 using TutoriaFiles.Infrastructure;
 using TutoriaFiles.API.Authentication;
 using AspNetCoreRateLimit;
@@ -80,14 +78,13 @@ try
     LogStartup("  Configuration values (checking env var override):");
     LogStartup($"    AzureStorage:ConnectionString set: {!string.IsNullOrWhiteSpace(builder.Configuration["AzureStorage:ConnectionString"])}");
     LogStartup($"    ConnectionStrings:DefaultConnection set: {!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("DefaultConnection"))}");
-    LogStartup($"    Jwt:SecretKey set: {!string.IsNullOrWhiteSpace(builder.Configuration["Jwt:SecretKey"])}");
     LogStartup($"    TutoriaApi:BaseUrl: {builder.Configuration["TutoriaApi:BaseUrl"] ?? "(not set)"}");
 
     // Check for common Azure env var naming issues
     LogStartup("  Checking for Azure App Service env vars (use __ for nested):");
     var envVarsToCheck = new[] {
         "AzureStorage__ConnectionString", "AzureStorage__ContainerName",
-        "ConnectionStrings__DefaultConnection", "Jwt__SecretKey", "TutoriaApi__BaseUrl"
+        "ConnectionStrings__DefaultConnection", "TutoriaApi__BaseUrl"
     };
     foreach (var envVar in envVarsToCheck)
     {
@@ -161,71 +158,45 @@ try
     LogStartup($"[PHASE 3/8] Rate limiting and form options configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
-    // PHASE 4: Configure Authentication
+    // PHASE 4: Configure Authentication (validates tokens via TutoriaApi)
     // ============================================================================
     LogStartup("[PHASE 4/8] Configuring authentication...");
     phaseStopwatch.Restart();
 
-    // Configure JWT Authentication with TutoriaApi validation + local fallback
-    var jwtSettings = builder.Configuration.GetSection("Jwt");
-    var secretKey = jwtSettings["SecretKey"];
     var tutoriaApiUrl = builder.Configuration["TutoriaApi:BaseUrl"];
 
-    LogStartup($"  JWT SecretKey configured: {!string.IsNullOrWhiteSpace(secretKey)}");
-    LogStartup($"  TutoriaApi BaseUrl configured: {!string.IsNullOrWhiteSpace(tutoriaApiUrl)}");
-    if (!string.IsNullOrWhiteSpace(tutoriaApiUrl))
-        LogStartup($"  TutoriaApi BaseUrl: {tutoriaApiUrl}");
-
-    if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
+    if (string.IsNullOrWhiteSpace(tutoriaApiUrl))
     {
-        // Register custom authentication handler that calls TutoriaApi first, then falls back to local validation
-        builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddScheme<JwtBearerOptions, TutoriaAuthenticationHandler>(
-                JwtBearerDefaults.AuthenticationScheme,
-                options =>
-                {
-                    // These options are used by the custom handler for local fallback
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        ValidateIssuerSigningKey = true,
-                        IssuerSigningKey = string.IsNullOrWhiteSpace(secretKey)
-                            ? null
-                            : new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-                        ValidateIssuer = !string.IsNullOrWhiteSpace(jwtSettings["Issuer"]),
-                        ValidIssuer = jwtSettings["Issuer"],
-                        ValidateAudience = !string.IsNullOrWhiteSpace(jwtSettings["Audience"]),
-                        ValidAudience = jwtSettings["Audience"],
-                        ValidateLifetime = true,
-                        ClockSkew = TimeSpan.Zero
-                    };
-                });
-
-        builder.Services.AddAuthorization(options =>
-        {
-            // ProfessorOrAbove: professor, super_admin
-            options.AddPolicy("ProfessorOrAbove", policy =>
-                policy.RequireRole("professor", "super_admin"));
-
-            // AdminOrAbove: admin professor, super_admin
-            options.AddPolicy("AdminOrAbove", policy =>
-                policy.RequireAssertion(context =>
-                    context.User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "super_admin") ||
-                    (context.User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "professor") &&
-                     context.User.HasClaim(c => c.Type == "isAdmin" && c.Value == "True"))));
-
-            // SuperAdminOnly: only super_admin
-            options.AddPolicy("SuperAdminOnly", policy =>
-                policy.RequireRole("super_admin"));
-        });
-
-        LogStartup($"  [OK] JWT Authentication configured (mode: {(string.IsNullOrWhiteSpace(tutoriaApiUrl) ? "local only" : "TutoriaApi + local fallback")})");
-    }
-    else
-    {
-        // No authentication - all endpoints are open (use with caution!)
-        LogStartup("  [WARNING] No JWT authentication configured - API is public!");
+        throw new InvalidOperationException("TutoriaApi:BaseUrl must be configured - tokens are validated against this API");
     }
 
+    LogStartup($"  TutoriaApi BaseUrl: {tutoriaApiUrl}");
+
+    // Register custom authentication handler that validates tokens via TutoriaApi
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddScheme<JwtBearerOptions, TutoriaAuthenticationHandler>(
+            JwtBearerDefaults.AuthenticationScheme,
+            options => { }); // No local options needed - we validate via TutoriaApi
+
+    builder.Services.AddAuthorization(options =>
+    {
+        // ProfessorOrAbove: professor, super_admin
+        options.AddPolicy("ProfessorOrAbove", policy =>
+            policy.RequireRole("professor", "super_admin"));
+
+        // AdminOrAbove: admin professor, super_admin
+        options.AddPolicy("AdminOrAbove", policy =>
+            policy.RequireAssertion(context =>
+                context.User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "super_admin") ||
+                (context.User.HasClaim(c => c.Type == System.Security.Claims.ClaimTypes.Role && c.Value == "professor") &&
+                 context.User.HasClaim(c => c.Type == "isAdmin" && c.Value == "True"))));
+
+        // SuperAdminOnly: only super_admin
+        options.AddPolicy("SuperAdminOnly", policy =>
+            policy.RequireRole("super_admin"));
+    });
+
+    LogStartup("  [OK] Authentication configured (tokens validated via TutoriaApi)");
     LogStartup($"[PHASE 4/8] Authentication configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
@@ -245,34 +216,30 @@ try
                           "Handles large file uploads (up to 15MB) to Azure Blob Storage"
         });
 
-        // Add Bearer auth to Swagger if authentication is configured (local OR TutoriaApi)
-        if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
+        // Add JWT Bearer authentication to Swagger
+        options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
         {
-            // Add JWT Bearer authentication to Swagger
-            options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-            {
-                Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer' [space] and then your token. Example: 'Bearer eyJhbGci...'",
-                Name = "Authorization",
-                In = ParameterLocation.Header,
-                Type = SecuritySchemeType.ApiKey,
-                Scheme = "Bearer"
-            });
+            Description = "JWT Authorization header. Enter 'Bearer' [space] and your token from TutoriaApi. Example: 'Bearer eyJhbGci...'",
+            Name = "Authorization",
+            In = ParameterLocation.Header,
+            Type = SecuritySchemeType.ApiKey,
+            Scheme = "Bearer"
+        });
 
-            options.AddSecurityRequirement(new OpenApiSecurityRequirement
+        options.AddSecurityRequirement(new OpenApiSecurityRequirement
+        {
             {
+                new OpenApiSecurityScheme
                 {
-                    new OpenApiSecurityScheme
+                    Reference = new OpenApiReference
                     {
-                        Reference = new OpenApiReference
-                        {
-                            Type = ReferenceType.SecurityScheme,
-                            Id = "Bearer"
-                        }
-                    },
-                    Array.Empty<string>()
-                }
-            });
-        }
+                        Type = ReferenceType.SecurityScheme,
+                        Id = "Bearer"
+                    }
+                },
+                Array.Empty<string>()
+            }
+        });
     });
 
     LogStartup($"[PHASE 5/8] Swagger configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
@@ -403,14 +370,8 @@ try
 
     app.UseCors();
     app.UseIpRateLimiting();
-
-    // Auth middleware must match registration condition (secretKey OR tutoriaApiUrl)
-    if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
-    {
-        app.UseAuthentication();
-        app.UseAuthorization();
-    }
-
+    app.UseAuthentication();
+    app.UseAuthorization();
     app.MapControllers();
 
     // Health check endpoints
@@ -443,7 +404,6 @@ try
             ["azureStorage_connectionString_set"] = !string.IsNullOrWhiteSpace(config["AzureStorage:ConnectionString"]),
             ["azureStorage_containerName"] = config["AzureStorage:ContainerName"] ?? "(not set)",
             ["database_connectionString_set"] = !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection")),
-            ["jwt_secretKey_set"] = !string.IsNullOrWhiteSpace(config["Jwt:SecretKey"]),
             ["tutoriaApi_baseUrl"] = config["TutoriaApi:BaseUrl"] ?? "(not set)",
             ["startupLogPath"] = startupLogPath,
             ["startupLogExists"] = File.Exists(startupLogPath)
