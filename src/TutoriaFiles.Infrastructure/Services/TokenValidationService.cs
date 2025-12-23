@@ -74,36 +74,56 @@ public class TokenValidationService : ITokenValidationService
 
     private async Task<ClaimsPrincipal?> ValidateTokenViaTutoriaApiAsync(string token)
     {
+        var validationUrl = $"{_tutoriaApiUrl}/api/auth/validate-token";
+        _logger.LogInformation("[TokenValidation] Calling TutoriaApi at: {Url}", validationUrl);
+
         using var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(5); // 5 second timeout
 
-        var request = new HttpRequestMessage(HttpMethod.Get, $"{_tutoriaApiUrl}/api/auth/validate-token");
+        var request = new HttpRequestMessage(HttpMethod.Get, validationUrl);
         request.Headers.Add("Authorization", $"Bearer {token}");
 
-        var response = await client.SendAsync(request);
-
-        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        try
         {
-            _logger.LogDebug("TutoriaApi returned 401 Unauthorized");
-            return null;
-        }
+            var response = await client.SendAsync(request);
+            _logger.LogInformation("[TokenValidation] TutoriaApi response: {StatusCode}", response.StatusCode);
 
-        if (!response.IsSuccessStatusCode)
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _logger.LogWarning("[TokenValidation] TutoriaApi returned 401 Unauthorized - token invalid or expired");
+                return null;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("[TokenValidation] TutoriaApi returned {StatusCode}: {Body}", response.StatusCode, errorBody);
+                return null;
+            }
+
+            // TutoriaApi returns the token payload on success
+            var payload = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+            if (payload == null)
+            {
+                _logger.LogWarning("[TokenValidation] TutoriaApi returned empty payload");
+                return null;
+            }
+
+            _logger.LogInformation("[TokenValidation] Token validated successfully, claims: {Claims}", string.Join(", ", payload.Keys));
+
+            // Convert the payload to ClaimsPrincipal
+            return CreatePrincipalFromPayload(payload);
+        }
+        catch (HttpRequestException ex)
         {
-            _logger.LogWarning("TutoriaApi returned {StatusCode}", response.StatusCode);
-            return null;
+            _logger.LogError(ex, "[TokenValidation] HTTP error calling TutoriaApi: {Message}", ex.Message);
+            throw;
         }
-
-        // TutoriaApi returns the token payload on success
-        var payload = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
-        if (payload == null)
+        catch (TaskCanceledException ex)
         {
-            _logger.LogWarning("TutoriaApi returned empty payload");
-            return null;
+            _logger.LogError(ex, "[TokenValidation] Timeout calling TutoriaApi (5s limit)");
+            throw;
         }
-
-        // Convert the payload to ClaimsPrincipal
-        return CreatePrincipalFromPayload(payload);
     }
 
     public ClaimsPrincipal? ValidateTokenLocally(string token)

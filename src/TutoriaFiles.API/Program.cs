@@ -245,7 +245,8 @@ try
                           "Handles large file uploads (up to 15MB) to Azure Blob Storage"
         });
 
-        if (!string.IsNullOrWhiteSpace(secretKey))
+        // Add Bearer auth to Swagger if authentication is configured (local OR TutoriaApi)
+        if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
         {
             // Add JWT Bearer authentication to Swagger
             options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
