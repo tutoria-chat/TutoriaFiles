@@ -8,47 +8,92 @@ using TutoriaFiles.API.Authentication;
 using AspNetCoreRateLimit;
 
 // ============================================================================
+// FAILSAFE FILE LOGGING - Writes to disk even if console/stdout fails
+// ============================================================================
+var startupLogPath = Path.Combine(AppContext.BaseDirectory, "startup.log");
+void LogStartup(string message)
+{
+    var line = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}] {message}";
+    Console.WriteLine(line);
+    try
+    {
+        File.AppendAllText(startupLogPath, line + Environment.NewLine);
+    }
+    catch { /* Ignore file write errors */ }
+}
+
+LogStartup("========== TUTORIAFILES STARTUP BEGIN ==========");
+LogStartup($"Startup log location: {startupLogPath}");
+
+// ============================================================================
 // STARTUP DIAGNOSTICS - Early logging before anything else
 // ============================================================================
 var startupStopwatch = Stopwatch.StartNew();
 var startupTimestamp = DateTime.UtcNow;
 
-Console.WriteLine("=============================================================");
-Console.WriteLine("TutoriaFiles API - Startup Diagnostics");
-Console.WriteLine("=============================================================");
-Console.WriteLine($"[STARTUP] Timestamp (UTC): {startupTimestamp:yyyy-MM-dd HH:mm:ss.fff}");
-Console.WriteLine($"[STARTUP] Process ID: {Environment.ProcessId}");
-Console.WriteLine($"[STARTUP] Machine Name: {Environment.MachineName}");
-Console.WriteLine($"[STARTUP] OS: {Environment.OSVersion}");
-Console.WriteLine($"[STARTUP] .NET Version: {Environment.Version}");
-Console.WriteLine($"[STARTUP] 64-bit Process: {Environment.Is64BitProcess}");
-Console.WriteLine($"[STARTUP] Working Directory: {Environment.CurrentDirectory}");
-Console.WriteLine($"[STARTUP] Command Line: {Environment.CommandLine}");
-Console.WriteLine("-------------------------------------------------------------");
+LogStartup("=============================================================");
+LogStartup("TutoriaFiles API - Startup Diagnostics");
+LogStartup("=============================================================");
+LogStartup($"[STARTUP] Timestamp (UTC): {startupTimestamp:yyyy-MM-dd HH:mm:ss.fff}");
+LogStartup($"[STARTUP] Process ID: {Environment.ProcessId}");
+LogStartup($"[STARTUP] Machine Name: {Environment.MachineName}");
+LogStartup($"[STARTUP] OS: {Environment.OSVersion}");
+LogStartup($"[STARTUP] .NET Version: {Environment.Version}");
+LogStartup($"[STARTUP] 64-bit Process: {Environment.Is64BitProcess}");
+LogStartup($"[STARTUP] Base Directory: {AppContext.BaseDirectory}");
+LogStartup($"[STARTUP] Working Directory: {Environment.CurrentDirectory}");
+LogStartup($"[STARTUP] Command Line: {Environment.CommandLine}");
+LogStartup("-------------------------------------------------------------");
 
 // Log Azure-specific environment variables (helps diagnose App Service issues)
-Console.WriteLine("[STARTUP] Azure Environment Variables:");
+LogStartup("[STARTUP] Azure Environment Variables:");
 var azureEnvVars = new[]
 {
     "ASPNETCORE_ENVIRONMENT", "DOTNET_ENVIRONMENT", "WEBSITE_SITE_NAME",
     "WEBSITE_INSTANCE_ID", "WEBSITE_SKU", "WEBSITE_HOSTNAME",
     "PORT", "WEBSITES_PORT", "HTTP_PLATFORM_PORT",
-    "ASPNETCORE_URLS", "DOTNET_RUNNING_IN_CONTAINER"
+    "ASPNETCORE_URLS", "DOTNET_RUNNING_IN_CONTAINER", "HOME"
 };
 foreach (var envVar in azureEnvVars)
 {
     var value = Environment.GetEnvironmentVariable(envVar);
     if (!string.IsNullOrEmpty(value))
-        Console.WriteLine($"  {envVar}={value}");
+        LogStartup($"  {envVar}={value}");
 }
-Console.WriteLine("-------------------------------------------------------------");
+LogStartup("-------------------------------------------------------------");
 
 try
 {
-    Console.WriteLine("[PHASE 1/8] Creating WebApplicationBuilder...");
+    LogStartup("[PHASE 1/8] Creating WebApplicationBuilder...");
     var phaseStopwatch = Stopwatch.StartNew();
 
     var builder = WebApplication.CreateBuilder(args);
+
+    // Log configuration sources for debugging
+    LogStartup("  Configuration sources loaded:");
+    foreach (var source in builder.Configuration.Sources)
+    {
+        LogStartup($"    - {source.GetType().Name}");
+    }
+
+    // Log critical config values to verify they're being overridden
+    LogStartup("  Configuration values (checking env var override):");
+    LogStartup($"    AzureStorage:ConnectionString set: {!string.IsNullOrWhiteSpace(builder.Configuration["AzureStorage:ConnectionString"])}");
+    LogStartup($"    ConnectionStrings:DefaultConnection set: {!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("DefaultConnection"))}");
+    LogStartup($"    Jwt:SecretKey set: {!string.IsNullOrWhiteSpace(builder.Configuration["Jwt:SecretKey"])}");
+    LogStartup($"    TutoriaApi:BaseUrl: {builder.Configuration["TutoriaApi:BaseUrl"] ?? "(not set)"}");
+
+    // Check for common Azure env var naming issues
+    LogStartup("  Checking for Azure App Service env vars (use __ for nested):");
+    var envVarsToCheck = new[] {
+        "AzureStorage__ConnectionString", "AzureStorage__ContainerName",
+        "ConnectionStrings__DefaultConnection", "Jwt__SecretKey", "TutoriaApi__BaseUrl"
+    };
+    foreach (var envVar in envVarsToCheck)
+    {
+        var value = Environment.GetEnvironmentVariable(envVar);
+        LogStartup($"    {envVar}: {(string.IsNullOrEmpty(value) ? "(NOT SET)" : "SET")}");
+    }
 
     // Configure Kestrel to allow large file uploads (15MB)
     builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -58,14 +103,14 @@ try
         serverOptions.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(5); // 5 minutes keep-alive
     });
 
-    Console.WriteLine($"[PHASE 1/8] WebApplicationBuilder created ({phaseStopwatch.ElapsedMilliseconds}ms)");
-    Console.WriteLine($"  Environment: {builder.Environment.EnvironmentName}");
-    Console.WriteLine($"  ContentRootPath: {builder.Environment.ContentRootPath}");
+    LogStartup($"[PHASE 1/8] WebApplicationBuilder created ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"  Environment: {builder.Environment.EnvironmentName}");
+    LogStartup($"  ContentRootPath: {builder.Environment.ContentRootPath}");
 
     // ============================================================================
     // PHASE 2: Configure Logging
     // ============================================================================
-    Console.WriteLine("[PHASE 2/8] Configuring logging...");
+    LogStartup("[PHASE 2/8] Configuring logging...");
     phaseStopwatch.Restart();
 
     // Configure built-in logging
@@ -77,12 +122,12 @@ try
     builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
     builder.Logging.AddFilter("System", LogLevel.Warning);
 
-    Console.WriteLine($"[PHASE 2/8] Logging configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"[PHASE 2/8] Logging configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
     // PHASE 3: Configure Rate Limiting & Form Options
     // ============================================================================
-    Console.WriteLine("[PHASE 3/8] Configuring rate limiting and form options...");
+    LogStartup("[PHASE 3/8] Configuring rate limiting and form options...");
     phaseStopwatch.Restart();
 
     // Add Rate Limiting
@@ -113,12 +158,12 @@ try
     // Add HttpClient for calling TutoriaApi
     builder.Services.AddHttpClient();
 
-    Console.WriteLine($"[PHASE 3/8] Rate limiting and form options configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"[PHASE 3/8] Rate limiting and form options configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
     // PHASE 4: Configure Authentication
     // ============================================================================
-    Console.WriteLine("[PHASE 4/8] Configuring authentication...");
+    LogStartup("[PHASE 4/8] Configuring authentication...");
     phaseStopwatch.Restart();
 
     // Configure JWT Authentication with TutoriaApi validation + local fallback
@@ -126,10 +171,10 @@ try
     var secretKey = jwtSettings["SecretKey"];
     var tutoriaApiUrl = builder.Configuration["TutoriaApi:BaseUrl"];
 
-    Console.WriteLine($"  JWT SecretKey configured: {!string.IsNullOrWhiteSpace(secretKey)}");
-    Console.WriteLine($"  TutoriaApi BaseUrl configured: {!string.IsNullOrWhiteSpace(tutoriaApiUrl)}");
+    LogStartup($"  JWT SecretKey configured: {!string.IsNullOrWhiteSpace(secretKey)}");
+    LogStartup($"  TutoriaApi BaseUrl configured: {!string.IsNullOrWhiteSpace(tutoriaApiUrl)}");
     if (!string.IsNullOrWhiteSpace(tutoriaApiUrl))
-        Console.WriteLine($"  TutoriaApi BaseUrl: {tutoriaApiUrl}");
+        LogStartup($"  TutoriaApi BaseUrl: {tutoriaApiUrl}");
 
     if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
     {
@@ -173,20 +218,20 @@ try
                 policy.RequireRole("super_admin"));
         });
 
-        Console.WriteLine($"  [OK] JWT Authentication configured (mode: {(string.IsNullOrWhiteSpace(tutoriaApiUrl) ? "local only" : "TutoriaApi + local fallback")})");
+        LogStartup($"  [OK] JWT Authentication configured (mode: {(string.IsNullOrWhiteSpace(tutoriaApiUrl) ? "local only" : "TutoriaApi + local fallback")})");
     }
     else
     {
         // No authentication - all endpoints are open (use with caution!)
-        Console.WriteLine("  [WARNING] No JWT authentication configured - API is public!");
+        LogStartup("  [WARNING] No JWT authentication configured - API is public!");
     }
 
-    Console.WriteLine($"[PHASE 4/8] Authentication configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"[PHASE 4/8] Authentication configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
     // PHASE 5: Configure Swagger
     // ============================================================================
-    Console.WriteLine("[PHASE 5/8] Configuring Swagger...");
+    LogStartup("[PHASE 5/8] Configuring Swagger...");
     phaseStopwatch.Restart();
 
     // Configure Swagger
@@ -229,49 +274,49 @@ try
         }
     });
 
-    Console.WriteLine($"[PHASE 5/8] Swagger configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"[PHASE 5/8] Swagger configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
     // PHASE 6: Register Infrastructure Services (Azure Blob, DB, etc.)
     // ============================================================================
-    Console.WriteLine("[PHASE 6/8] Registering infrastructure services...");
+    LogStartup("[PHASE 6/8] Registering infrastructure services...");
     phaseStopwatch.Restart();
 
     // Log Azure Storage configuration (masked)
     var azureStorageConnectionString = builder.Configuration["AzureStorage:ConnectionString"];
     var azureStorageContainer = builder.Configuration["AzureStorage:ContainerName"];
-    Console.WriteLine($"  AzureStorage:ConnectionString configured: {!string.IsNullOrWhiteSpace(azureStorageConnectionString)}");
+    LogStartup($"  AzureStorage:ConnectionString configured: {!string.IsNullOrWhiteSpace(azureStorageConnectionString)}");
     if (!string.IsNullOrWhiteSpace(azureStorageConnectionString))
     {
         // Extract account name from connection string for logging (safe to log)
         var accountNameMatch = System.Text.RegularExpressions.Regex.Match(
             azureStorageConnectionString, @"AccountName=([^;]+)");
         if (accountNameMatch.Success)
-            Console.WriteLine($"  AzureStorage:AccountName: {accountNameMatch.Groups[1].Value}");
+            LogStartup($"  AzureStorage:AccountName: {accountNameMatch.Groups[1].Value}");
     }
-    Console.WriteLine($"  AzureStorage:ContainerName: {azureStorageContainer ?? "(not set)"}");
+    LogStartup($"  AzureStorage:ContainerName: {azureStorageContainer ?? "(not set)"}");
 
     // Log database connection (masked)
     var dbConnectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-    Console.WriteLine($"  Database ConnectionString configured: {!string.IsNullOrWhiteSpace(dbConnectionString)}");
+    LogStartup($"  Database ConnectionString configured: {!string.IsNullOrWhiteSpace(dbConnectionString)}");
     if (!string.IsNullOrWhiteSpace(dbConnectionString))
     {
         // Extract server name from connection string for logging (safe to log)
         var serverMatch = System.Text.RegularExpressions.Regex.Match(
             dbConnectionString, @"Server=([^;]+)");
         if (serverMatch.Success)
-            Console.WriteLine($"  Database Server: {serverMatch.Groups[1].Value}");
+            LogStartup($"  Database Server: {serverMatch.Groups[1].Value}");
     }
 
     // Add Infrastructure services (Blob Storage, Services) - automatically registered!
     builder.Services.AddInfrastructure(builder.Configuration);
 
-    Console.WriteLine($"[PHASE 6/8] Infrastructure services registered ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"[PHASE 6/8] Infrastructure services registered ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
     // PHASE 7: Configure CORS
     // ============================================================================
-    Console.WriteLine("[PHASE 7/8] Configuring CORS...");
+    LogStartup("[PHASE 7/8] Configuring CORS...");
     phaseStopwatch.Restart();
 
     // Add CORS
@@ -292,25 +337,25 @@ try
         });
     });
 
-    Console.WriteLine($"[PHASE 7/8] CORS configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup($"[PHASE 7/8] CORS configured ({phaseStopwatch.ElapsedMilliseconds}ms)");
 
     // ============================================================================
     // PHASE 8: Build Application
     // ============================================================================
-    Console.WriteLine("[PHASE 8/8] Building application...");
+    LogStartup("[PHASE 8/8] Building application...");
     phaseStopwatch.Restart();
 
     var app = builder.Build();
 
-    Console.WriteLine($"[PHASE 8/8] Application built ({phaseStopwatch.ElapsedMilliseconds}ms)");
-    Console.WriteLine("-------------------------------------------------------------");
-    Console.WriteLine($"[STARTUP] All phases completed in {startupStopwatch.ElapsedMilliseconds}ms");
-    Console.WriteLine("-------------------------------------------------------------");
+    LogStartup($"[PHASE 8/8] Application built ({phaseStopwatch.ElapsedMilliseconds}ms)");
+    LogStartup("-------------------------------------------------------------");
+    LogStartup($"[STARTUP] All phases completed in {startupStopwatch.ElapsedMilliseconds}ms");
+    LogStartup("-------------------------------------------------------------");
 
     // ============================================================================
     // Configure HTTP Request Pipeline
     // ============================================================================
-    Console.WriteLine("[PIPELINE] Configuring HTTP request pipeline...");
+    LogStartup("[PIPELINE] Configuring HTTP request pipeline...");
 
     // Swagger enabled in all environments
     app.UseSwagger();
@@ -339,26 +384,61 @@ try
     // Health check endpoints
     app.MapGet("/ping", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
-    Console.WriteLine("[PIPELINE] HTTP request pipeline configured");
+    // Diagnostic endpoint to view startup log (helps debug Azure issues)
+    app.MapGet("/debug/startup-log", () =>
+    {
+        try
+        {
+            if (File.Exists(startupLogPath))
+            {
+                var content = File.ReadAllText(startupLogPath);
+                return Results.Text(content, "text/plain");
+            }
+            return Results.Text($"Startup log not found at: {startupLogPath}", "text/plain");
+        }
+        catch (Exception ex)
+        {
+            return Results.Text($"Error reading startup log: {ex.Message}", "text/plain");
+        }
+    });
+
+    // Diagnostic endpoint to view current config (masks secrets)
+    app.MapGet("/debug/config", (IConfiguration config) =>
+    {
+        var diagnostics = new Dictionary<string, object>
+        {
+            ["environment"] = app.Environment.EnvironmentName,
+            ["azureStorage_connectionString_set"] = !string.IsNullOrWhiteSpace(config["AzureStorage:ConnectionString"]),
+            ["azureStorage_containerName"] = config["AzureStorage:ContainerName"] ?? "(not set)",
+            ["database_connectionString_set"] = !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection")),
+            ["jwt_secretKey_set"] = !string.IsNullOrWhiteSpace(config["Jwt:SecretKey"]),
+            ["tutoriaApi_baseUrl"] = config["TutoriaApi:BaseUrl"] ?? "(not set)",
+            ["startupLogPath"] = startupLogPath,
+            ["startupLogExists"] = File.Exists(startupLogPath)
+        };
+        return Results.Ok(diagnostics);
+    });
+
+    LogStartup("[PIPELINE] HTTP request pipeline configured");
 
     // ============================================================================
     // Final Startup Summary
     // ============================================================================
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
 
-    Console.WriteLine("=============================================================");
-    Console.WriteLine("TutoriaFiles API - Ready to Start");
-    Console.WriteLine("=============================================================");
-    Console.WriteLine($"[READY] Total startup time: {startupStopwatch.ElapsedMilliseconds}ms");
-    Console.WriteLine($"[READY] Environment: {app.Environment.EnvironmentName}");
-    Console.WriteLine($"[READY] Endpoints:");
-    Console.WriteLine("  - GET  /ping (health check)");
-    Console.WriteLine("  - POST /api/files/upload (max 15MB)");
-    Console.WriteLine("  - GET  /api/files/download");
-    Console.WriteLine("  - DELETE /api/files/delete");
-    Console.WriteLine("  - GET  /swagger (API documentation)");
-    Console.WriteLine("=============================================================");
-    Console.WriteLine("[READY] Starting Kestrel web server...");
+    LogStartup("=============================================================");
+    LogStartup("TutoriaFiles API - Ready to Start");
+    LogStartup("=============================================================");
+    LogStartup($"[READY] Total startup time: {startupStopwatch.ElapsedMilliseconds}ms");
+    LogStartup($"[READY] Environment: {app.Environment.EnvironmentName}");
+    LogStartup($"[READY] Endpoints:");
+    LogStartup("  - GET  /ping (health check)");
+    LogStartup("  - POST /api/files/upload (max 15MB)");
+    LogStartup("  - GET  /api/files/download");
+    LogStartup("  - DELETE /api/files/delete");
+    LogStartup("  - GET  /swagger (API documentation)");
+    LogStartup("=============================================================");
+    LogStartup("[READY] Starting Kestrel web server...");
 
     logger.LogInformation("TutoriaFiles API started successfully in {ElapsedMs}ms", startupStopwatch.ElapsedMilliseconds);
 
@@ -369,33 +449,33 @@ catch (Exception ex)
     // ============================================================================
     // STARTUP FAILURE - Log everything possible
     // ============================================================================
-    Console.WriteLine("=============================================================");
-    Console.WriteLine("FATAL: TutoriaFiles API failed to start!");
-    Console.WriteLine("=============================================================");
-    Console.WriteLine($"[FATAL] Exception Type: {ex.GetType().FullName}");
-    Console.WriteLine($"[FATAL] Message: {ex.Message}");
-    Console.WriteLine($"[FATAL] Time elapsed before crash: {startupStopwatch.ElapsedMilliseconds}ms");
-    Console.WriteLine("-------------------------------------------------------------");
-    Console.WriteLine("[FATAL] Stack Trace:");
-    Console.WriteLine(ex.StackTrace);
+    LogStartup("=============================================================");
+    LogStartup("FATAL: TutoriaFiles API failed to start!");
+    LogStartup("=============================================================");
+    LogStartup($"[FATAL] Exception Type: {ex.GetType().FullName}");
+    LogStartup($"[FATAL] Message: {ex.Message}");
+    LogStartup($"[FATAL] Time elapsed before crash: {startupStopwatch.ElapsedMilliseconds}ms");
+    LogStartup("-------------------------------------------------------------");
+    LogStartup("[FATAL] Stack Trace:");
+    LogStartup(ex.StackTrace ?? "(no stack trace)");
 
     if (ex.InnerException != null)
     {
-        Console.WriteLine("-------------------------------------------------------------");
-        Console.WriteLine("[FATAL] Inner Exception:");
-        Console.WriteLine($"  Type: {ex.InnerException.GetType().FullName}");
-        Console.WriteLine($"  Message: {ex.InnerException.Message}");
-        Console.WriteLine($"  Stack Trace: {ex.InnerException.StackTrace}");
+        LogStartup("-------------------------------------------------------------");
+        LogStartup("[FATAL] Inner Exception:");
+        LogStartup($"  Type: {ex.InnerException.GetType().FullName}");
+        LogStartup($"  Message: {ex.InnerException.Message}");
+        LogStartup($"  Stack Trace: {ex.InnerException.StackTrace ?? "(no stack trace)"}");
     }
 
-    Console.WriteLine("=============================================================");
-    Console.WriteLine("[FATAL] Possible causes to investigate:");
-    Console.WriteLine("  1. Missing or invalid Azure Storage connection string");
-    Console.WriteLine("  2. Missing or invalid database connection string");
-    Console.WriteLine("  3. Port binding issues (check ASPNETCORE_URLS or PORT env vars)");
-    Console.WriteLine("  4. Missing configuration in Azure App Service Application Settings");
-    Console.WriteLine("  5. Assembly loading issues (check all dependencies are published)");
-    Console.WriteLine("=============================================================");
+    LogStartup("=============================================================");
+    LogStartup("[FATAL] Possible causes to investigate:");
+    LogStartup("  1. Missing or invalid Azure Storage connection string");
+    LogStartup("  2. Missing or invalid database connection string");
+    LogStartup("  3. Port binding issues (check ASPNETCORE_URLS or PORT env vars)");
+    LogStartup("  4. Missing configuration in Azure App Service Application Settings");
+    LogStartup("  5. Assembly loading issues (check all dependencies are published)");
+    LogStartup("=============================================================");
 
     // Re-throw to ensure Azure App Service sees the failure
     throw;
