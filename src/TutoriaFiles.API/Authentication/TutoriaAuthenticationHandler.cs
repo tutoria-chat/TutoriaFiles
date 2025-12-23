@@ -7,58 +7,64 @@ using TutoriaFiles.Core.Interfaces;
 
 namespace TutoriaFiles.API.Authentication;
 
-/// <summary>
-/// Custom authentication handler that validates JWT tokens by calling TutoriaApi first,
-/// with fallback to local validation if TutoriaApi is unavailable.
-/// This ensures JWT secrets are only maintained in one place (TutoriaApi).
-/// </summary>
 public class TutoriaAuthenticationHandler : AuthenticationHandler<JwtBearerOptions>
 {
     private readonly ITokenValidationService _tokenValidationService;
+    private readonly ILogger<TutoriaAuthenticationHandler> _logger;
 
     public TutoriaAuthenticationHandler(
         IOptionsMonitor<JwtBearerOptions> options,
-        ILoggerFactory logger,
+        ILoggerFactory loggerFactory,
         UrlEncoder encoder,
         ITokenValidationService tokenValidationService)
-        : base(options, logger, encoder)
+        : base(options, loggerFactory, encoder)
     {
         _tokenValidationService = tokenValidationService;
+        _logger = loggerFactory.CreateLogger<TutoriaAuthenticationHandler>();
     }
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        // Check for Authorization header
+        var path = Request.Path.ToString();
+        _logger.LogInformation("[Auth] Authenticating request to {Path}", path);
+
         if (!Request.Headers.ContainsKey("Authorization"))
         {
+            _logger.LogWarning("[Auth] No Authorization header for {Path}", path);
             return AuthenticateResult.NoResult();
         }
 
         var authHeader = Request.Headers["Authorization"].ToString();
         if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
+            _logger.LogWarning("[Auth] Invalid auth header format for {Path}", path);
             return AuthenticateResult.Fail("Invalid authorization header");
         }
 
         var token = authHeader.Substring("Bearer ".Length).Trim();
+        var tokenPreview = token.Length > 20 ? token[..20] + "..." : token;
+        _logger.LogInformation("[Auth] Validating token {TokenPreview} for {Path}", tokenPreview, path);
 
         try
         {
-            // Validate token using TutoriaApi + local fallback
             var principal = await _tokenValidationService.ValidateTokenAsync(token);
 
             if (principal == null)
             {
+                _logger.LogWarning("[Auth] Token validation returned null for {Path}", path);
                 return AuthenticateResult.Fail("Invalid or expired token");
             }
 
-            // Create authentication ticket
+            var userId = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown";
+            var role = principal.FindFirst(ClaimTypes.Role)?.Value ?? "unknown";
+            _logger.LogInformation("[Auth] Token valid for user {UserId} role {Role} on {Path}", userId, role, path);
+
             var ticket = new AuthenticationTicket(principal, JwtBearerDefaults.AuthenticationScheme);
             return AuthenticateResult.Success(ticket);
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error during token validation");
+            _logger.LogError(ex, "[Auth] Exception validating token for {Path}: {Message}", path, ex.Message);
             return AuthenticateResult.Fail("Token validation failed");
         }
     }

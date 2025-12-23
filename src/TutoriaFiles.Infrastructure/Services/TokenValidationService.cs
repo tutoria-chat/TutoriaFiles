@@ -33,28 +33,33 @@ public class TokenValidationService : ITokenValidationService
     public async Task<ClaimsPrincipal?> ValidateTokenAsync(string token)
     {
         var validationUrl = $"{_tutoriaApiUrl}/api/auth/validate-token";
-        _logger.LogDebug("[TokenValidation] Validating token against: {Url}", validationUrl);
+        var tokenPreview = token.Length > 20 ? token[..20] + "..." : token;
+        _logger.LogInformation("[TokenValidation] Calling {Url} with token {Token}", validationUrl, tokenPreview);
 
         using var client = _httpClientFactory.CreateClient();
-        client.Timeout = TimeSpan.FromSeconds(5);
+        client.Timeout = TimeSpan.FromSeconds(10);
 
         var request = new HttpRequestMessage(HttpMethod.Get, validationUrl);
         request.Headers.Add("Authorization", $"Bearer {token}");
 
         try
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var response = await client.SendAsync(request);
+            sw.Stop();
+
+            _logger.LogInformation("[TokenValidation] TutoriaApi responded {StatusCode} in {Ms}ms", (int)response.StatusCode, sw.ElapsedMilliseconds);
 
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                _logger.LogDebug("[TokenValidation] Token invalid or expired (401)");
+                _logger.LogWarning("[TokenValidation] Token rejected (401 Unauthorized)");
                 return null;
             }
 
             if (!response.IsSuccessStatusCode)
             {
                 var errorBody = await response.Content.ReadAsStringAsync();
-                _logger.LogWarning("[TokenValidation] TutoriaApi returned {StatusCode}: {Body}", response.StatusCode, errorBody);
+                _logger.LogWarning("[TokenValidation] TutoriaApi returned {StatusCode}: {Body}", (int)response.StatusCode, errorBody);
                 return null;
             }
 
@@ -65,17 +70,17 @@ public class TokenValidationService : ITokenValidationService
                 return null;
             }
 
-            _logger.LogDebug("[TokenValidation] Token valid, claims: {Claims}", string.Join(", ", payload.Keys));
+            _logger.LogInformation("[TokenValidation] Token valid, claims: {Claims}", string.Join(", ", payload.Keys));
             return CreatePrincipalFromPayload(payload);
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "[TokenValidation] Failed to reach TutoriaApi: {Message}", ex.Message);
+            _logger.LogError(ex, "[TokenValidation] HTTP error calling TutoriaApi: {Message}", ex.Message);
             return null;
         }
         catch (TaskCanceledException)
         {
-            _logger.LogError("[TokenValidation] Timeout calling TutoriaApi (5s limit)");
+            _logger.LogError("[TokenValidation] TIMEOUT calling TutoriaApi (10s limit)");
             return null;
         }
     }

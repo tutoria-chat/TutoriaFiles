@@ -40,12 +40,28 @@ try
         opts.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(5);
     });
 
-    // Logging
+    // Logging + Application Insights
     builder.Logging.ClearProviders();
     builder.Logging.AddConsole();
     builder.Logging.SetMinimumLevel(LogLevel.Information);
     builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
     builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
+    // Application Insights - uses APPLICATIONINSIGHTS_CONNECTION_STRING env var
+    var appInsightsConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+        ?? builder.Configuration["ApplicationInsights:ConnectionString"];
+    if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+    {
+        builder.Services.AddApplicationInsightsTelemetry(opts =>
+        {
+            opts.ConnectionString = appInsightsConnectionString;
+        });
+        Log($"Application Insights configured");
+    }
+    else
+    {
+        Log("Application Insights NOT configured (set APPLICATIONINSIGHTS_CONNECTION_STRING)");
+    }
 
     // Rate limiting
     builder.Services.AddMemoryCache();
