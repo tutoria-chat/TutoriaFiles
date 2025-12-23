@@ -357,6 +357,36 @@ try
     // ============================================================================
     LogStartup("[PIPELINE] Configuring HTTP request pipeline...");
 
+    // FIRST: Add global exception handler to catch ALL errors and log them
+    app.Use(async (context, next) =>
+    {
+        try
+        {
+            await next(context);
+        }
+        catch (Exception ex)
+        {
+            // Log to file so we can see it via Kudu
+            var errorLog = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff}] REQUEST ERROR: {context.Request.Path}\n" +
+                           $"  Exception: {ex.GetType().FullName}\n" +
+                           $"  Message: {ex.Message}\n" +
+                           $"  Stack: {ex.StackTrace}\n";
+            if (ex.InnerException != null)
+            {
+                errorLog += $"  Inner: {ex.InnerException.Message}\n";
+            }
+            try { File.AppendAllText(startupLogPath, errorLog); } catch { }
+
+            // Return 500 with error details (remove in production if sensitive)
+            context.Response.StatusCode = 500;
+            context.Response.ContentType = "text/plain";
+            await context.Response.WriteAsync($"Error: {ex.Message}\n\nSee /debug/startup-log for details");
+        }
+    });
+
+    // Bare minimum test endpoint - no middleware, no DI
+    app.MapGet("/test", () => "OK").ExcludeFromDescription();
+
     // Swagger enabled in all environments
     app.UseSwagger();
     app.UseSwaggerUI(options =>
@@ -373,7 +403,8 @@ try
     app.UseCors();
     app.UseIpRateLimiting();
 
-    if (!string.IsNullOrWhiteSpace(secretKey))
+    // Auth middleware must match registration condition (secretKey OR tutoriaApiUrl)
+    if (!string.IsNullOrWhiteSpace(secretKey) || !string.IsNullOrWhiteSpace(tutoriaApiUrl))
     {
         app.UseAuthentication();
         app.UseAuthorization();
