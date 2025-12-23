@@ -17,22 +17,38 @@ public class BlobStorageService : IBlobStorageService
     {
         _logger = logger;
 
+        _logger.LogInformation("[BlobStorageService] Initializing...");
+
         var connectionString = configuration["AzureStorage:ConnectionString"];
         if (string.IsNullOrWhiteSpace(connectionString))
         {
+            _logger.LogError("[BlobStorageService] Azure Storage connection string is NOT configured!");
             throw new InvalidOperationException("Azure Storage connection string not configured");
         }
 
+        // Log account name (safe, not the key)
+        var accountNameMatch = System.Text.RegularExpressions.Regex.Match(connectionString, @"AccountName=([^;]+)");
+        if (accountNameMatch.Success)
+        {
+            _logger.LogInformation("[BlobStorageService] Using storage account: {AccountName}", accountNameMatch.Groups[1].Value);
+        }
+
         _containerName = configuration["AzureStorage:ContainerName"] ?? "tutoria-files";
+        _logger.LogInformation("[BlobStorageService] Container name: {ContainerName}", _containerName);
 
         try
         {
+            _logger.LogInformation("[BlobStorageService] Creating BlobServiceClient...");
             _blobServiceClient = new BlobServiceClient(connectionString);
-            EnsureContainerExistsAsync().Wait();
+            _logger.LogInformation("[BlobStorageService] BlobServiceClient created successfully");
+
+            // Don't block on container check - do it lazily or skip in constructor
+            // EnsureContainerExistsAsync().Wait(); // This can cause issues!
+            _logger.LogInformation("[BlobStorageService] Initialization complete (container check deferred)");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to initialize blob storage service");
+            _logger.LogError(ex, "[BlobStorageService] Failed to initialize: {Message}", ex.Message);
             throw new InvalidOperationException($"Invalid Azure Storage configuration: {ex.Message}", ex);
         }
     }
@@ -71,6 +87,9 @@ public class BlobStorageService : IBlobStorageService
     {
         try
         {
+            // Ensure container exists on first upload
+            await EnsureContainerExistsAsync();
+
             var blobClient = _blobServiceClient.GetBlobContainerClient(_containerName).GetBlobClient(blobPath);
 
             // Set content type
