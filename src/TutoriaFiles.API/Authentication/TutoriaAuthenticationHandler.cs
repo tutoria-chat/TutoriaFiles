@@ -1,19 +1,18 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using TutoriaFiles.Core.Interfaces;
 
 namespace TutoriaFiles.API.Authentication;
 
-public class TutoriaAuthenticationHandler : AuthenticationHandler<JwtBearerOptions>
+public class TutoriaAuthenticationHandler : AuthenticationHandler<TutoriaAuthOptions>
 {
     private readonly ITokenValidationService _tokenValidationService;
     private readonly ILogger<TutoriaAuthenticationHandler> _logger;
 
     public TutoriaAuthenticationHandler(
-        IOptionsMonitor<JwtBearerOptions> options,
+        IOptionsMonitor<TutoriaAuthOptions> options,
         ILoggerFactory loggerFactory,
         UrlEncoder encoder,
         ITokenValidationService tokenValidationService)
@@ -59,7 +58,7 @@ public class TutoriaAuthenticationHandler : AuthenticationHandler<JwtBearerOptio
             var role = principal.FindFirst(ClaimTypes.Role)?.Value ?? "unknown";
             _logger.LogInformation("[Auth] Token valid for user {UserId} role {Role} on {Path}", userId, role, path);
 
-            var ticket = new AuthenticationTicket(principal, JwtBearerDefaults.AuthenticationScheme);
+            var ticket = new AuthenticationTicket(principal, TutoriaAuthOptions.SchemeName);
             return AuthenticateResult.Success(ticket);
         }
         catch (Exception ex)

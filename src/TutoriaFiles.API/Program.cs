@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.OpenApi.Models;
 using System.Diagnostics;
 using TutoriaFiles.Infrastructure;
@@ -85,8 +84,8 @@ try
     builder.Services.AddHttpClient();
 
     // Authentication via TutoriaApi
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddScheme<JwtBearerOptions, TutoriaAuthenticationHandler>(JwtBearerDefaults.AuthenticationScheme, _ => { });
+    builder.Services.AddAuthentication(TutoriaAuthOptions.SchemeName)
+        .AddScheme<TutoriaAuthOptions, TutoriaAuthenticationHandler>(TutoriaAuthOptions.SchemeName, _ => { });
 
     builder.Services.AddAuthorization(opts =>
     {
@@ -186,25 +185,6 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
     app.MapControllers();
-
-    // Health check
-    app.MapGet("/ping", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
-
-    // Debug endpoints
-    app.MapGet("/debug/log", () =>
-    {
-        if (File.Exists(logPath))
-            return Results.Text(File.ReadAllText(logPath), "text/plain");
-        return Results.Text("Log file not found", "text/plain");
-    });
-
-    app.MapGet("/debug/config", (IConfiguration config) => Results.Ok(new
-    {
-        environment = app.Environment.EnvironmentName,
-        tutoriaApiUrl = config["TutoriaApi:BaseUrl"] ?? "(not set)",
-        azureStorageConfigured = !string.IsNullOrWhiteSpace(config["AzureStorage:ConnectionString"]),
-        databaseConfigured = !string.IsNullOrWhiteSpace(config.GetConnectionString("DefaultConnection"))
-    }));
 
     Log("=== TutoriaFiles API Ready ===");
     app.Run();
