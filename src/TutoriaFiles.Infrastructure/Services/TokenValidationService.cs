@@ -99,7 +99,7 @@ public class TokenValidationService : ITokenValidationService
                     "sub" => ClaimTypes.NameIdentifier,
                     "name" => ClaimTypes.Name,
                     "email" => ClaimTypes.Email,
-                    "role" => ClaimTypes.Role,
+                    "role" or "type" => ClaimTypes.Role,
                     _ => kvp.Key
                 };
                 claims.Add(new Claim(claimType, value));
